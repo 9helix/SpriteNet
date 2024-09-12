@@ -1,4 +1,4 @@
-roboflow_datasets/
-sprite_datasets/
 .comet.config
+roboflow/
+sprites/
 yolov5_results/
