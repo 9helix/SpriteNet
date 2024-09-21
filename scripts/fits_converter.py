@@ -11,12 +11,12 @@ def fits_to_png(filename, new_folder, detection_only):
     if ".bin" in filename:
         with open(os.path.join(folder, filename), "rb") as fid:
             # TODO
-            return
+            return 0
 
     print("Converting:", filename, end=" -> ")
     if os.path.isfile(os.path.join(new_folder, filename + ".png")):
         print("Already exists.")
-        return
+        return 0
     try:
         with fits.open(os.path.join(folder, filename)) as hdul:
             try:
@@ -24,17 +24,18 @@ def fits_to_png(filename, new_folder, detection_only):
                 avgpix = hdul[3].data
             except TypeError:
                 print("Possibly corrupted FITS file.")
-                return
+                return 0
             if detection_only:
                 detection = maxpix - avgpix
             else:
                 detection = maxpix
             im = Image.fromarray(detection)
             im.save(os.path.join(new_folder, filename + ".png"))
-            converted += 1
             print("Success!")
+            return 1
     except OSError:
         print("Not a FITS file.")
+        return 0
 
 
 def folder_walker(folder, detection_only=True):
@@ -45,7 +46,8 @@ def folder_walker(folder, detection_only=True):
     if not os.path.exists(new_folder):
         os.mkdir(new_folder)
     for filename in os.listdir(folder):
-        fits_to_png(filename, new_folder, detection_only)
+        if fits_to_png(filename, new_folder, detection_only):
+            converted += 1
     return converted
 
 
