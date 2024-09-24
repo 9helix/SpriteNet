@@ -1,4 +1,5 @@
 pretrained weights of yolov5s yield poorer perfomance than randomly initialized weights on the same number of epochs (100)
+when trained for 250 epochs, for both SpriteNet dataset verison 2 and 5, pretrained weights yielded better performance than with randomly initialized ones.
 
 model SSD MobileNet V2 FPNLite 640x640 from this repository https://github.com/satmonkey/MeteorDL was taken into consideration for using but upon inspection of its performance on the COCO dataset and number of parameters, it was found to be inferior to the yolov5 model series from this repo https://github.com/ultralytics/yolov5.
 

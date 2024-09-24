@@ -1,5 +1,6 @@
 import numpy as np
 from PIL import Image, ImageFont
+import os
 
 """
 Script for separating thumbnails from a single image. Adapteed from the original made by Damir Šegon.
@@ -32,12 +33,13 @@ box = (0, 0, 56, 10)
 box_where = (10, 10)
 font = ImageFont.truetype("tahoma.ttf", 16)
 vignetting_parameter = 0.0009  # for 6mm lens use 0.0007
-folder_path = r"D:\Documents\Astronomija\GMN\dev\SpriteNet\thumbs"
+root_path = r"D:\Documents\Astronomija\GMN\dev\SpriteNet\thumbs"
 
 # Open the original image
-original_image = Image.open(
-    r"D:\Preuzimanja\HR0001_20240910_175313_784114_DETECTED_thumbs.jpg"
-)
+image_path = r"D:\Preuzimanja\NL000K_20230814_194616_749219_CAPTURED_thumbs.jpg"
+original_image = Image.open(image_path)
+folder_path = os.path.join(root_path, os.path.basename(image_path)[:15])
+os.makedirs(folder_path, exist_ok=True)
 # Crop top 20 pixels
 cropped_image = original_image.crop(
     (
@@ -75,15 +77,6 @@ for row in range(num_rows):
         )
 
         # Resize the thumbnail up by a factor of 4
-        """
-        thumbnail = thumbnail.resize(
-            (
-                thumbnail_width * resize_factor,
-                (thumbnail_height - pixels_to_delete_from_top_of_single_thumbnail_image)
-                * resize_factor,
-            )
-        )  # Adjusted height for resizing
-        """
 
         thumbnail = thumbnail.resize(
             (
@@ -92,6 +85,8 @@ for row in range(num_rows):
                 * resize_factor,
             )
         )  # Adjusted height for resizing
+
+        # thumbnail = thumbnail.resize((320, 320))
         # thumbnail.paste(thumb_timestamp, box_where)
         thumbnail = apply_vignetting(thumbnail, vignetting_parameter).convert("RGB")
         thumbnail = thumbnail.resize((320, 320))
