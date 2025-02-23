@@ -4,3 +4,19 @@ when trained for 250 epochs, for both SpriteNet dataset verison 2 and 5, pretrai
 model SSD MobileNet V2 FPNLite 640x640 from this repository https://github.com/satmonkey/MeteorDL was taken into consideration for using but upon inspection of its performance on the COCO dataset and number of parameters, it was found to be inferior to the yolov5 model series from this repo https://github.com/ultralytics/yolov5.
 
 yolov5 was used rather than v8 as v5 focuses more on usage on edge devices.
+
+for spritenetv5 maxpixel variants achieved similar performance as the model trained on the original detection images.
+
+stretched images (aspect ratio 1:1) yield better results.
+
+yolov5 determines the best epoch by calculating which one has the highest weighted combination of metrics (precision, recall mAP@0.5, mAP@0.5:0.95). https://github.com/ultralytics/yolov5/issues/8701
+
+custom fitness function can be created, example below.
+yolov5/utils/metrics.py: line 17
+from:
+w = [0.0, 0.0, 0.1, 0.9]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
+to:
+w = [0.5, 0.5, 0.0, 0.0]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
+
+
+Running validation on model trained on spritenet-maxpixel-v2-pretrained gave similar results with custom and default thresholds.

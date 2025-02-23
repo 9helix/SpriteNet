@@ -1,5 +1,9 @@
 .comet.config
+.env
+.venv
+.idea
+.vscode
 roboflow/
-sprites/
+raw_data/
 yolov5_results/
-thumbs/
+tf/
