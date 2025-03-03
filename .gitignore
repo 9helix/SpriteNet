@@ -7,3 +7,5 @@ roboflow/
 raw_data/
 yolov5_results/
 tf/
+yolov5s.pt
+__pycache__/

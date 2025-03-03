@@ -20,7 +20,7 @@ def find_file_with_string(folder, search_string):
 pairs = {}
 dataset_folder = input("Enter folder path: ")
 subfolders = ["test/images", "train/images", "valid/images"]
-sprites = r"D:\Documents\Astronomija\GMN\dev\SpriteNet\sprites"
+sprites = r"/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/raw_data/"
 for subfolder in subfolders:
     for file in os.listdir(os.path.join(dataset_folder, subfolder)):
         ff_file = file[: file.find("_png")]
