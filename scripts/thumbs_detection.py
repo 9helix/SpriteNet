@@ -23,8 +23,8 @@ except ImportError:
 
 """Some functions were adapted from the yolov5 github repository, mostly from the utils/general.py"""
 
-DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/yolov5_results/train/spriteNetv5-maxpix_pretrained/weights/best-fp16.tflite"
-#DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/yolov5_results/train/spritenet-maxpixel-v4-pretrained/weights/best-fp16.tflite"
+DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spriteNetv5-maxpix_pretrained/weights/best-fp16.tflite"
+#DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v4-pretrained/weights/best-fp16.tflite"
 log = logging.getLogger("logger")
 
 
@@ -133,8 +133,8 @@ def get_timestamp(folder_path, imgname):
     try:
         with tarfile.open(archive_path, "r:bz2") as tar:
             ct=1
-            # Look through archive files
-            for member in sorted(tar.getmembers(),key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S")):
+            # Look through archive files, first element is "." so it is ommitted
+            for member in sorted(tar.getmembers()[1:],key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S")):
                 # Find file containing timestamp information 
                 # (adjust this condition based on your specific file naming convention)
                 if math.ceil(ct/FF_FILES_IN_THUMB)==thumb_index:
@@ -149,7 +149,7 @@ def get_timestamp(folder_path, imgname):
     return imgname
 
 
-def mark_sprites(output, image, folder_path, imgname):
+def mark_sprites(output, image, folder_path, imgname,save):
     edit_image = image.copy()
     draw = ImageDraw.Draw(edit_image)
     # Draw the rectangle
@@ -164,7 +164,12 @@ def mark_sprites(output, image, folder_path, imgname):
         draw.text(text_position, number, fill="red")
     imgname=get_timestamp(folder_path,imgname)
     # Save the modified image
-    edit_image.save(f'{os.path.join(folder_path,imgname+"_marked")}.png')
+    if save:
+        edit_image.save(f'{os.path.join(folder_path,imgname+"_marked")}.png')
+        UNMARKED_DIR=os.path.join(folder_path,"unmarked")
+        os.makedirs(UNMARKED_DIR,exist_ok=True)
+        image.save(f'{os.path.join(UNMARKED_DIR,imgname)}.png')
+    return imgname
 
 
 def process(
@@ -210,7 +215,7 @@ def process(
         if not x.shape[0]:
             continue
         f = open(os.path.join(folder_path, "detections.txt"), "a")
-        f.write(f"{imgname}\n")
+        
         print()
         print(imgname)
         print("Number of initial boxes:", x.shape[0])
@@ -237,8 +242,9 @@ def process(
         # values are normalized to the image size (0-1)
         # 0,0 is upper left corner
         print("Output:", output)
-        if output.shape[0] > 0 and save:
-            mark_sprites(output, image, folder_path, imgname)
+        if output.shape[0] > 0:
+            imgname=mark_sprites(output, image, folder_path, imgname,save)
+            f.write(f"{imgname}\n")
         for i in output:
             f.write(f"{i[0]},{i[1]},{i[2]},{i[3]},{i[4]}\n")
         f.write("\n")

@@ -20,3 +20,9 @@ w = [0.5, 0.5, 0.0, 0.0]  # weights for [P, R, mAP@0.5, mAP@0.5:0.95]
 
 
 Running validation on model trained on spritenet-maxpixel-v2-pretrained gave similar results with custom and default thresholds.
+
+yolo11 is being tested as a replacement for yolo5 since it reports greater maP on COCO dataset with lower latency.
+training with yolo11m took 45 mins on dataset of around 2300 images
+yolo11 models seem to offer no improvement in training results when compared to yolov5s model. yolo11 models also often tend to have slighlty worse results.
+
+custom yolov5 architecture seems to not be needed when training as the model seems to self-adjust itself based on the number of classes.

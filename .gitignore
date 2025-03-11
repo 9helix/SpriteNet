@@ -5,7 +5,8 @@
 .vscode
 roboflow/
 raw_data/
-yolov5_results/
+results/
 tf/
-yolov5s.pt
+*.pt
 __pycache__/
+.python-version
