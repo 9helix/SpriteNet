@@ -42,7 +42,7 @@ def folder_walker(folder, detection_only=True):
     converted = 0
     if not os.path.exists(folder):
         return None
-    new_folder = os.path.join(folder, "converted")
+    new_folder = os.path.join(folder, f"converted_{'detection' if detection_only else 'maxpixel'}")
     if not os.path.exists(new_folder):
         os.mkdir(new_folder)
     for filename in os.listdir(folder):

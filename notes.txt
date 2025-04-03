@@ -26,3 +26,13 @@ training with yolo11m took 45 mins on dataset of around 2300 images
 yolo11 models seem to offer no improvement in training results when compared to yolov5s model. yolo11 models also often tend to have slighlty worse results.
 
 custom yolov5 architecture seems to not be needed when training as the model seems to self-adjust itself based on the number of classes.
+
+41m training for yolo5m on dataset of around 2300 images
+yolo11s took around 25mins, slightly worse performance when compared to yolov5s
+
+currently both maxpixel and detection only datasets achieve similar performance. the expected outcome was that detection images would do better than maxpixel ones as there is much less clutter (non zero value pixels) on image. but it seems that objects on image that are in movement (clouds) can on detection images create bright streaks which the model can mistake for sprites.
+
+
+ultralytics output:
+PRO TIP 💡 Replace 'model=yolov5s.pt' with new 'model=yolov5su.pt'.
+YOLOv5 'u' models are trained with https://github.com/ultralytics/ultralytics and feature improved performance vs standard YOLOv5 models trained with https://github.com/ultralytics/yolov5.
