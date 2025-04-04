@@ -36,3 +36,5 @@ currently both maxpixel and detection only datasets achieve similar performance.
 ultralytics output:
 PRO TIP 💡 Replace 'model=yolov5s.pt' with new 'model=yolov5su.pt'.
 YOLOv5 'u' models are trained with https://github.com/ultralytics/ultralytics and feature improved performance vs standard YOLOv5 models trained with https://github.com/ultralytics/yolov5.
+
+analyzing number of stars on sprite images is currently halted as there are nights in which software didnt properly detect stars
