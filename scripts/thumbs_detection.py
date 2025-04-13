@@ -2,10 +2,13 @@ import os
 from PIL import ImageDraw
 import numpy as np
 import logging
-from getThumbs import main
+from RMS.getThumbs import main
 import tarfile
 import math
 from datetime import datetime
+import statistics
+from RMS.Routines import MaskImage
+from RMS.Formats.CALSTARS import readCALSTARS
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -24,7 +27,7 @@ except ImportError:
 """Some functions were adapted from the yolov5 github repository, mostly from the utils/general.py"""
 
 DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spriteNetv5-maxpix_pretrained/weights/best-fp16.tflite"
-#DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v4-pretrained/weights/best-fp16.tflite"
+
 log = logging.getLogger("logger")
 
 
@@ -100,56 +103,65 @@ def nms(predictions: np.ndarray, iou_threshold: float = 0.45) -> np.ndarray:
 
     return keep[sort_index.argsort()]
 
+
 def get_timestamp(folder_path, imgname):
     """
-    Find the timestamp in a specific file from a tar.bz2 archive
-    
+    Find the timestamp in a specific file from a tFS_*.tar.bz2 archive
+
     Args:
         folder_path (str): Path to the folder with thumbnails
         imgname (str): Name of the image without extension
     """
-    
+
     # Get parent folder (directory containing the folder_path)
     parent_folder = os.path.dirname(folder_path)
-    
+
     # Extract info from imgname (assuming imgname format contains station code
     code_and_date = imgname[:15]
-    thumb_index=int(imgname.split("_")[-1])
-    
+    thumb_index = int(imgname.split("_")[-1])
+
     # Find all .tar.bz2 files in parent folder that match pattern
-    archive_file=""
+    archive_file = ""
     for filename in sorted(os.listdir(parent_folder)):
         if filename.endswith(".tar.bz2") and filename.startswith(f"FS_{code_and_date}"):
-            archive_file=filename
+            archive_file = filename
             break
-    
-    if archive_file=="":
+
+    if archive_file == "":
         print(f"No matching archives found for {code_and_date} in {parent_folder}")
         return imgname
-    
+
     # Extract the timestamp from the appropriate file in the archive
     archive_path = os.path.join(parent_folder, archive_file)
-    FF_FILES_IN_THUMB=5
+    FF_FILES_IN_THUMB = 5
     try:
         with tarfile.open(archive_path, "r:bz2") as tar:
-            ct=1
+            ct = 1
             # Look through archive files, first element is "." so it is ommitted
-            for member in sorted(tar.getmembers()[1:],key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S")):
-                # Find file containing timestamp information 
-                # (adjust this condition based on your specific file naming convention)
-                if math.ceil(ct/FF_FILES_IN_THUMB)==thumb_index:
-                    return member.name[5:27]+"_thumbnail"+str(thumb_index)
-                ct+=1
-                
+            files = sorted(
+                tar.getmembers()[1:],
+                key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S"),
+            )
+            for i in range(len(files)):
+                if math.ceil(ct / FF_FILES_IN_THUMB) == thumb_index:
+                    stack_files = []
+                    for j in range(i, min(i + FF_FILES_IN_THUMB, len(files))):
+                        stack_files.append("FF_" + files[j].name[5:39] + ".fits")
+                    return (
+                        files[i].name[5:27] + "_thumbnail" + str(thumb_index),
+                        stack_files,
+                    )
+                ct += 1
+
     except Exception as e:
         print(f"Error reading archive {archive_file}: {e}")
-        return imgname
-    
+        return imgname, None
+
     print(f"No timestamp found for {imgname}")
-    return imgname
+    return imgname, None
 
 
-def mark_sprites(output, image, folder_path, imgname,save):
+def mark_sprites(output, image, folder_path, imgname, save=True):
     edit_image = image.copy()
     draw = ImageDraw.Draw(edit_image)
     # Draw the rectangle
@@ -162,14 +174,15 @@ def mark_sprites(output, image, folder_path, imgname,save):
         number = str(round(output[i, 4], 3))
         text_position = (top_left[0], top_left[1] - 15)  # Adjust the position as needed
         draw.text(text_position, number, fill="red")
-    imgname=get_timestamp(folder_path,imgname)
+
     # Save the modified image
     if save:
-        edit_image.save(f'{os.path.join(folder_path,imgname+"_marked")}.png')
-        UNMARKED_DIR=os.path.join(folder_path,"unmarked")
-        os.makedirs(UNMARKED_DIR,exist_ok=True)
-        image.save(f'{os.path.join(UNMARKED_DIR,imgname)}.png')
-    return imgname
+        MARKED_DIR = os.path.join(folder_path, "marked")
+        os.makedirs(MARKED_DIR, exist_ok=True)
+        edit_image.save(f'{os.path.join(MARKED_DIR,imgname+"_marked")}.png')
+        UNMARKED_DIR = os.path.join(folder_path, "unmarked")
+        os.makedirs(UNMARKED_DIR, exist_ok=True)
+        image.save(f"{os.path.join(UNMARKED_DIR,imgname)}.png")
 
 
 def process(
@@ -181,6 +194,8 @@ def process(
     iou_thres=0.45,
     max_det=-1,
     save=True,
+    calstars=False,
+    min_stars = 0
 ):
     """Runs the detector for a single image
 
@@ -214,8 +229,7 @@ def process(
         x = np.concatenate((box, conf), 1)[np.reshape(conf, -1) > conf_thres]
         if not x.shape[0]:
             continue
-        f = open(os.path.join(folder_path, "detections.txt"), "a")
-        
+
         print()
         print(imgname)
         print("Number of initial boxes:", x.shape[0])
@@ -242,25 +256,60 @@ def process(
         # values are normalized to the image size (0-1)
         # 0,0 is upper left corner
         print("Output:", output)
+        # sprites candidates were found
         if output.shape[0] > 0:
-            imgname=mark_sprites(output, image, folder_path, imgname,save)
+            imgname, stack_files = get_timestamp(folder_path, imgname)
+            if stack_files is None:  # cant determine time of image so were skipping it
+                return
+
+            if calstars:
+                ff_stars = []
+                for ff in calstars:
+                    if ff[0] in stack_files:
+                        ff_stars.append(len(ff[1]))
+                if len(ff_stars) == 0: # for images with no stars, small chance for sprite occuring on them
+                    print("No stars on images")
+                    return
+                if statistics.median(ff_stars) < min_stars:
+                    print("Not enough stars in the images")
+                    return
+            print("Keeping detection, median stars:", statistics.median(ff_stars))
+            mark_sprites(output, image, folder_path, imgname, save)
+
+            f = open(os.path.join(folder_path, "detections.txt"), "a")
             f.write(f"{imgname}\n")
-        for i in output:
-            f.write(f"{i[0]},{i[1]},{i[2]},{i[3]},{i[4]}\n")
-        f.write("\n")
-        f.close()
+            for i in output:
+                f.write(f"{i[0]},{i[1]},{i[2]},{i[3]},{i[4]}\n")
+            f.write("\n")
+            f.close()
 
 
-def run_sprite_detection(folder_path, model_path):
+def load_mask(config):
+    mask = None
+    mask_path_default = os.path.join(config.config_file_path, config.mask_file)
+    if os.path.exists(mask_path_default) and config.stack_mask:
+        mask_path = os.path.abspath(mask_path_default)
+        mask = MaskImage.loadMask(mask_path)
+    return mask
+
+
+def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask):
     interpreter, input_details, output_details = init_interpreter(model_path)
-    for i in os.listdir(folder_path):
-        if not i.endswith("_CAPTURED_thumbs.jpg"):
-            continue
+    mask = load_mask(config)
+    calstars = readCALSTARS(
+        folder_path, "CALSTARS_" + os.path.basename(folder_path) + ".txt"
+    )
 
-        thumbnail_file = os.path.join(folder_path, i)
-
+    thumbnail_file = os.path.join(
+        folder_path, os.path.basename(folder_path) + "_CAPTURED_thumbs.jpg"
+    )
+    if os.path.exists(thumbnail_file):
         for thumbnail, thumbnail_name, subfolder_path in main(0.0009, thumbnail_file):
-            image = thumbnail  # .convert("RGB") already done in main
+            # remove known camera obstructions
+            if mask is not None and disable_mask==False:
+                image = MaskImage.maskImage(thumbnail, mask)
+            else:
+                image = thumbnail  # .convert("RGB") already done in main
 
             input_shape = input_details["shape"]
             image = image.resize((input_shape[1], input_shape[2]))
@@ -285,10 +334,12 @@ def run_sprite_detection(folder_path, model_path):
                 image,
                 subfolder_path,
                 thumbnail_name,
-                conf_thres=0.434,
+                conf_thres,
                 iou_thres=0.1,
                 max_det=4,
                 save=True,
+                calstars=calstars,
+                min_stars=args.star_threshold
             )
 
 
@@ -303,11 +354,43 @@ if __name__ == "__main__":
         default=DEBUG_MODEL_PATH,
         help="Path to the TFLite model file (default: %(default)s)",
     )
-
+    parser.add_argument(
+        "--confidence",
+        "-c",
+        type=float,
+        default=0.001,
+        help="Confidence threshold for detection (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--star-threshold",
+        "-s",
+        type=int,
+        default=0,
+        help="Minimum number of stars on image to accept detection (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--disable-mask",
+        "-d",
+        action="store_true",
+        help="Disable the use of mask even if available",
+    )
     args = parser.parse_args()
+
+    import RMS.ConfigReader as cr
+
+    # Load the configuration file
+    config = cr.parse(".config")
+
     if not TFLITE_AVAILABLE:
         log.warning(
             "TensorFlow Lite is not available on this system. Sprite detection skipped..."
         )
     else:
-        run_sprite_detection(folder_path=args.folder_path, model_path=args.model)
+        run_sprite_detection(
+            folder_path=args.folder_path,
+            model_path=args.model,
+            conf_thres=args.confidence,
+            config=config,
+            disable_mask=args.disable_mask
+        )
+    #example: python -m RMS.thumbs_detection -m /mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v7-pretrained-yolov5/weights/best-fp16.tflite -c 0.455 -s 0 /mnt/1tb/Documents/Astronomija/GMN/dev/hr002k/HR002K_20250411_181455_674301

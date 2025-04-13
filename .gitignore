@@ -8,5 +8,7 @@ raw_data/
 results/
 tf/
 *.pt
+*.npy
 __pycache__/
 .python-version
+.yolov5

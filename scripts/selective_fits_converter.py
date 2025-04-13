@@ -60,7 +60,7 @@ existing_files = set()
 newest_files = set()
 
 data_folder = "roboflow/SpriteNet-5"  # input("Enter dataset folder: ")
-data_folder2 = "roboflow/spritenet-maxpixel-6"  # input("Enter dataset folder from which to copy files: ")
+data_folder2 = "roboflow/spritenet-maxpixel-7"  # input("Enter dataset folder from which to copy files: ")
 
 
 folder = r"/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/raw_data/"
@@ -68,25 +68,22 @@ detect = input("Detection only? y/N ")
 subfolders = ["test/images", "train/images", "valid/images"]
 for subfolder in subfolders:
     subfolder_files = os.listdir(os.path.join(data_folder, subfolder))
-    # print(subfolder_files)
     for file in subfolder_files:
-        if file.find("-fits") != -1:
-            file_name = file[: file.find("-fits")]
+        if file.find("fits_") != -1:
+            file_name = file[: file.find("fits_")-1]
             existing_files.add(file_name)
 
 for subfolder in subfolders:
 
     subfolder_files = os.listdir(os.path.join(data_folder2, subfolder))
-    # print(subfolder_files)
     for file in subfolder_files:
-        if file.find("-fits") != -1 and not file.endswith(".npy"):
-
-            file_name = file[: file.find("-fits")]
+        if file.find("fits_") != -1 and not file.endswith(".npy"):
+            file_name = file[: file.find("fits_")-1]
             newest_files.add(file_name)
 
 acquired_files = newest_files - existing_files
-print(len(newest_files), len(existing_files), len(acquired_files))
 print(newest_files)
+print(len(newest_files), len(existing_files), len(acquired_files))
 converted = folder_walker(folder, True if detect.lower() == "y" else False)
 
 if converted is None:
