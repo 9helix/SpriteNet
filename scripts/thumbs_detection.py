@@ -1,5 +1,5 @@
 import os
-from PIL import ImageDraw
+from PIL import ImageDraw, Image
 import numpy as np
 import logging
 from RMS.getThumbs import main
@@ -259,9 +259,11 @@ def process(
         # sprites candidates were found
         if output.shape[0] > 0:
             imgname, stack_files = get_timestamp(folder_path, imgname)
-            if stack_files is None:  # cant determine time of image so were skipping it
+            if stack_files is None:  # cant determine image timestamp so were skipping it
+                # probably empty part of the last thumb row
+                print("Can't determine image timestamp")
                 return
-
+            print("Determined timestamp:", imgname)
             if calstars:
                 ff_stars = []
                 for ff in calstars:
@@ -287,19 +289,22 @@ def process(
 def load_mask(config):
     mask = None
     mask_path_default = os.path.join(config.config_file_path, config.mask_file)
-    if os.path.exists(mask_path_default) and config.stack_mask:
+    if os.path.exists(mask_path_default):
         mask_path = os.path.abspath(mask_path_default)
         mask = MaskImage.loadMask(mask_path)
     return mask
 
 
-def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask):
+def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask, min_stars=0):
     interpreter, input_details, output_details = init_interpreter(model_path)
     mask = load_mask(config)
+    if mask is None:
+        print("No mask file found")
     calstars = readCALSTARS(
         folder_path, "CALSTARS_" + os.path.basename(folder_path) + ".txt"
     )
-
+    if not calstars:
+        print("No CALSTARS file found")
     thumbnail_file = os.path.join(
         folder_path, os.path.basename(folder_path) + "_CAPTURED_thumbs.jpg"
     )
@@ -307,7 +312,7 @@ def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_ma
         for thumbnail, thumbnail_name, subfolder_path in main(0.0009, thumbnail_file):
             # remove known camera obstructions
             if mask is not None and disable_mask==False:
-                image = MaskImage.maskImage(thumbnail, mask)
+                image = Image.fromarray(MaskImage.maskImage(np.array(thumbnail), mask))
             else:
                 image = thumbnail  # .convert("RGB") already done in main
 
@@ -339,8 +344,10 @@ def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_ma
                 max_det=4,
                 save=True,
                 calstars=calstars,
-                min_stars=args.star_threshold
+                min_stars=min_stars,
             )
+    else:
+        print(f"Thumbnail file {thumbnail_file} not found. Skipping detection.")
 
 
 if __name__ == "__main__":
@@ -391,6 +398,7 @@ if __name__ == "__main__":
             model_path=args.model,
             conf_thres=args.confidence,
             config=config,
-            disable_mask=args.disable_mask
+            disable_mask=args.disable_mask,
+            min_stars=args.star_threshold
         )
     #example: python -m RMS.thumbs_detection -m /mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v7-pretrained-yolov5/weights/best-fp16.tflite -c 0.455 -s 0 /mnt/1tb/Documents/Astronomija/GMN/dev/hr002k/HR002K_20250411_181455_674301
