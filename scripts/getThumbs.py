@@ -80,7 +80,7 @@ def main(vignetting_parameter, image_path, save=False):
 
             # Resize the thumbnail up by a factor of 4
 
-            thumbnail = thumbnail.resize(
+            """ thumbnail = thumbnail.resize(
                 (
                     thumbnail_width * resize_factor,
                     (
@@ -89,12 +89,12 @@ def main(vignetting_parameter, image_path, save=False):
                     )
                     * resize_factor,
                 )
-            )  # Adjusted height for resizing
+            )  """ # Adjusted height for resizing
 
             # thumbnail = thumbnail.resize((320, 320))
             # thumbnail.paste(thumb_timestamp, box_where)
-            thumbnail = apply_vignetting(thumbnail, vignetting_parameter).convert("RGB")
-            thumbnail = thumbnail.resize((320, 320))
+            thumbnail = apply_vignetting(thumbnail, vignetting_parameter *resize_factor).convert("RGB")
+            #thumbnail = thumbnail.resize((320, 320)) should be handled afterwards
             # Save the thumbnail to a separate file
             count += 1
             # thumbnail.save(f"{folder_path}/thumbnail_{row+1}_{column+1}.bmp")

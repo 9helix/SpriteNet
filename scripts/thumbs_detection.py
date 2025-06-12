@@ -133,25 +133,24 @@ def get_timestamp(folder_path, imgname):
 
     # Extract the timestamp from the appropriate file in the archive
     archive_path = os.path.join(parent_folder, archive_file)
-    FF_FILES_IN_THUMB = 5
+    FF_FILES_IN_THUMB = 5 # config.thumb_stack
     try:
         with tarfile.open(archive_path, "r:bz2") as tar:
-            ct = 1
             # Look through archive files, first element is "." so it is ommitted
             files = sorted(
                 tar.getmembers()[1:],
                 key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S"),
             )
-            for i in range(len(files)):
-                if math.ceil(ct / FF_FILES_IN_THUMB) == thumb_index:
-                    stack_files = []
-                    for j in range(i, min(i + FF_FILES_IN_THUMB, len(files))):
-                        stack_files.append("FF_" + files[j].name[5:39] + ".fits")
-                    return (
-                        files[i].name[5:27] + "_thumbnail" + str(thumb_index),
-                        stack_files,
-                    )
-                ct += 1
+                
+            start_index = (thumb_index - 1) * FF_FILES_IN_THUMB
+            if start_index < len(files):
+                stack_files = []
+                for j in range(start_index, min(start_index+ FF_FILES_IN_THUMB, len(files))):
+                    stack_files.append("FF_" + files[j].name[5:39] + ".fits")
+                return (
+                    files[start_index].name[5:27] + "_thumbnail" + str(thumb_index),
+                    stack_files,
+                )
 
     except Exception as e:
         print(f"Error reading archive {archive_file}: {e}")
@@ -295,7 +294,7 @@ def load_mask(config):
     return mask
 
 
-def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask, min_stars=0):
+def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask, min_stars,vignetting_parameter):
     interpreter, input_details, output_details = init_interpreter(model_path)
     mask = load_mask(config)
     if mask is None:
@@ -309,18 +308,23 @@ def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_ma
         folder_path, os.path.basename(folder_path) + "_CAPTURED_thumbs.jpg"
     )
     if os.path.exists(thumbnail_file):
-        for thumbnail, thumbnail_name, subfolder_path in main(0.0009, thumbnail_file):
+        for thumbnail, thumbnail_name, subfolder_path in main(vignetting_parameter, thumbnail_file):
             # remove known camera obstructions
             if mask is not None and disable_mask==False:
-                image = Image.fromarray(MaskImage.maskImage(np.array(thumbnail), mask))
+                if np.array(thumbnail).shape!=mask.shape:
+                    print("Mask and image size do not match",np.array(thumbnail).shape,mask.shape)
+                else:
+                    print("Masking image")
+                    image = Image.fromarray(MaskImage.maskImage(np.array(thumbnail), mask))
             else:
                 image = thumbnail  # .convert("RGB") already done in main
 
             input_shape = input_details["shape"]
             image = image.resize((input_shape[1], input_shape[2]))
             input_data = np.array(image, dtype=np.float32)
-
-            input_data /= 255
+            
+            #taken from run function in yolov5/detect.py
+            input_data /= 255 
             if len(input_data.shape) == 3:
                 input_data = input_data[None]  # expand for batch dim
 
@@ -380,6 +384,13 @@ if __name__ == "__main__":
         "-d",
         action="store_true",
         help="Disable the use of mask even if available",
+    ) 
+    parser.add_argument(
+        "--vignetting",
+        "-v",
+        type=float,
+        default=0.0009,
+        help="Confidence threshold for detection (default: %(default)s)",
     )
     args = parser.parse_args()
 
@@ -399,6 +410,7 @@ if __name__ == "__main__":
             conf_thres=args.confidence,
             config=config,
             disable_mask=args.disable_mask,
-            min_stars=args.star_threshold
+            min_stars=args.star_threshold,
+            vignetting_parameter=args.vignetting,
         )
     #example: python -m RMS.thumbs_detection -m /mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v7-pretrained-yolov5/weights/best-fp16.tflite -c 0.455 -s 0 /mnt/1tb/Documents/Astronomija/GMN/dev/hr002k/HR002K_20250411_181455_674301
