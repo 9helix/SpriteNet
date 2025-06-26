@@ -23,7 +23,7 @@ def apply_vignetting(image2correct, vignetting_parameter):
     return corrected_image
 
 
-def main(vignetting_parameter, image_path, save=False):
+def get_thumbnails(vignetting_parameter, image_path, save=False):
     # Set thumbnail dimensions
     thumbnail_width = 320
     thumbnail_height = 190
@@ -116,5 +116,5 @@ if __name__ == "__main__":
     # Open the original image
     image_path = input("Image path: ")
 
-    for i in main(vignetting_parameter, image_path,save=True):
+    for i in get_thumbnails(vignetting_parameter, image_path,save=True):
         pass

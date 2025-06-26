@@ -2,13 +2,13 @@ import os
 from PIL import ImageDraw, Image
 import numpy as np
 import logging
-from RMS.getThumbs import main
+from RMS.getThumbs import get_thumbnails, apply_vignetting
 import tarfile
-import math
 from datetime import datetime
 import statistics
 from RMS.Routines import MaskImage
 from RMS.Formats.CALSTARS import readCALSTARS
+from RMS.Formats.FFfits import read as readFFfile
 
 try:
     from tflite_runtime.interpreter import Interpreter
@@ -29,18 +29,6 @@ except ImportError:
 DEBUG_MODEL_PATH = "/mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spriteNetv5-maxpix_pretrained/weights/best-fp16.tflite"
 
 log = logging.getLogger("logger")
-
-
-def init_interpreter(model_path):
-    interpreter = Interpreter(model_path=model_path)
-    interpreter.allocate_tensors()
-
-    input_details = interpreter.get_input_details()[0]
-    output_details = interpreter.get_output_details()[0]
-
-    print(input_details["shape"], input_details["dtype"])
-    print(output_details["shape"])
-    return interpreter, input_details, output_details
 
 
 # taken from yolov5/utils/general.py
@@ -104,187 +92,6 @@ def nms(predictions: np.ndarray, iou_threshold: float = 0.45) -> np.ndarray:
     return keep[sort_index.argsort()]
 
 
-def get_timestamp(folder_path, imgname):
-    """
-    Find the timestamp in a specific file from a tFS_*.tar.bz2 archive
-
-    Args:
-        folder_path (str): Path to the folder with thumbnails
-        imgname (str): Name of the image without extension
-    """
-
-    # Get parent folder (directory containing the folder_path)
-    parent_folder = os.path.dirname(folder_path)
-
-    # Extract info from imgname (assuming imgname format contains station code
-    code_and_date = imgname[:15]
-    thumb_index = int(imgname.split("_")[-1])
-
-    # Find all .tar.bz2 files in parent folder that match pattern
-    archive_file = ""
-    for filename in sorted(os.listdir(parent_folder)):
-        if filename.endswith(".tar.bz2") and filename.startswith(f"FS_{code_and_date}"):
-            archive_file = filename
-            break
-
-    if archive_file == "":
-        print(f"No matching archives found for {code_and_date} in {parent_folder}")
-        return imgname
-
-    # Extract the timestamp from the appropriate file in the archive
-    archive_path = os.path.join(parent_folder, archive_file)
-    FF_FILES_IN_THUMB = 5 # config.thumb_stack
-    try:
-        with tarfile.open(archive_path, "r:bz2") as tar:
-            # Look through archive files, first element is "." so it is ommitted
-            files = sorted(
-                tar.getmembers()[1:],
-                key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S"),
-            )
-                
-            start_index = (thumb_index - 1) * FF_FILES_IN_THUMB
-            if start_index < len(files):
-                stack_files = []
-                for j in range(start_index, min(start_index+ FF_FILES_IN_THUMB, len(files))):
-                    stack_files.append("FF_" + files[j].name[5:39] + ".fits")
-                return (
-                    files[start_index].name[5:27] + "_thumbnail" + str(thumb_index),
-                    stack_files,
-                )
-
-    except Exception as e:
-        print(f"Error reading archive {archive_file}: {e}")
-        return imgname, None
-
-    print(f"No timestamp found for {imgname}")
-    return imgname, None
-
-
-def mark_sprites(output, image, folder_path, imgname, save=True):
-    edit_image = image.copy()
-    draw = ImageDraw.Draw(edit_image)
-    # Draw the rectangle
-    width, height = edit_image.size
-    for i in range(output.shape[0]):
-        top_left = (output[i, 0] * width, output[i, 1] * height)
-        bottom_right = (output[i, 2] * width, output[i, 3] * height)
-        draw.rectangle([top_left, bottom_right], outline="red", width=1)
-        # Display the number above the rectangle
-        number = str(round(output[i, 4], 3))
-        text_position = (top_left[0], top_left[1] - 15)  # Adjust the position as needed
-        draw.text(text_position, number, fill="red")
-
-    # Save the modified image
-    if save:
-        MARKED_DIR = os.path.join(folder_path, "marked")
-        os.makedirs(MARKED_DIR, exist_ok=True)
-        edit_image.save(f'{os.path.join(MARKED_DIR,imgname+"_marked")}.png')
-        UNMARKED_DIR = os.path.join(folder_path, "unmarked")
-        os.makedirs(UNMARKED_DIR, exist_ok=True)
-        image.save(f"{os.path.join(UNMARKED_DIR,imgname)}.png")
-
-
-def process(
-    prediction,
-    image,
-    folder_path,
-    imgname,
-    conf_thres=0.25,
-    iou_thres=0.45,
-    max_det=-1,
-    save=True,
-    calstars=False,
-    min_stars = 0
-):
-    """Runs the detector for a single image
-
-    Args:
-        prediction (_type_): _description_
-        image (_type_): _description_
-        folder_path (str): _description_. Defaults to "".
-        imgname (str): _description_. Defaults to "".
-        conf_thres (float, optional): confidence threshold. Defaults to 0.25.
-        iou_thres (float, optional): iou threshold. Defaults to 0.45.
-        max_det (int, optional): maximum allowed number of detections. Defaults to -1.
-        save (bool, optional): _description_. Defaults to True.
-    """
-    max_nms = 30000  # upper limit for number of boxes before nms
-    # max_wh = 7680 maximum box width/height
-
-    xc = prediction[..., 4] > conf_thres  # detection candidates mask
-    # output = np.zeros((max_det, 5))
-
-    # we can later vectorize prediction so it processes all images at once
-    for xi, x in enumerate(prediction):
-        x = x[xc[xi]]  # detection candidates
-        # Compute conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
-        # calculate box
-        box = xywh2xyxy(x[:, :4])
-        # find highest confidence among all classes
-        conf = np.max(x[:, 5:6], 1, keepdims=True)
-        # j=np.argmax(x[:, 5:6], 1, keepdims=True)
-        # merge results into one array and filter candidates
-        x = np.concatenate((box, conf), 1)[np.reshape(conf, -1) > conf_thres]
-        if not x.shape[0]:
-            continue
-
-        print()
-        print(imgname)
-        print("Number of initial boxes:", x.shape[0])
-        # sort by confidence and remove excess boxes
-        x = x[np.argsort(x[:, 4])[::-1][:max_nms]]
-        print("Pre-NMS:", x)
-        # classes (only 1 used here),c=0
-        # c = x[:, 5:6] * max_wh
-        # boxes (offset by class), scores
-        x = x[:, :5]
-        # boxes, scores = x[:, :4] + c, x[:, 4]
-        # non-max suppression
-        i = nms(x, iou_thres)
-        print("Post-NMS:", i)
-
-        # limit detections
-        if max_det > 0:
-            output = x[i][:max_det]
-        else:
-            output = x[i]
-
-        # the output is in the format [x1, y1, x2, y2, conf]
-        # x1, y1 is the top left corner, x2, y2 is the bottom right corner
-        # values are normalized to the image size (0-1)
-        # 0,0 is upper left corner
-        print("Output:", output)
-        # sprites candidates were found
-        if output.shape[0] > 0:
-            imgname, stack_files = get_timestamp(folder_path, imgname)
-            if stack_files is None:  # cant determine image timestamp so were skipping it
-                # probably empty part of the last thumb row
-                print("Can't determine image timestamp")
-                return
-            print("Determined timestamp:", imgname)
-            if calstars:
-                ff_stars = []
-                for ff in calstars:
-                    if ff[0] in stack_files:
-                        ff_stars.append(len(ff[1]))
-                if len(ff_stars) == 0: # for images with no stars, small chance for sprite occuring on them
-                    print("No stars on images")
-                    return
-                if statistics.median(ff_stars) < min_stars:
-                    print("Not enough stars in the images")
-                    return
-            print("Keeping detection, median stars:", statistics.median(ff_stars))
-            mark_sprites(output, image, folder_path, imgname, save)
-
-            f = open(os.path.join(folder_path, "detections.txt"), "a")
-            f.write(f"{imgname}\n")
-            for i in output:
-                f.write(f"{i[0]},{i[1]},{i[2]},{i[3]},{i[4]}\n")
-            f.write("\n")
-            f.close()
-
-
 def load_mask(config):
     mask = None
     mask_path_default = os.path.join(config.config_file_path, config.mask_file)
@@ -294,64 +101,367 @@ def load_mask(config):
     return mask
 
 
-def run_sprite_detection(folder_path, model_path, conf_thres, config, disable_mask, min_stars,vignetting_parameter):
-    interpreter, input_details, output_details = init_interpreter(model_path)
-    mask = load_mask(config)
-    if mask is None:
-        print("No mask file found")
-    calstars = readCALSTARS(
-        folder_path, "CALSTARS_" + os.path.basename(folder_path) + ".txt"
-    )
-    if not calstars:
-        print("No CALSTARS file found")
-    thumbnail_file = os.path.join(
-        folder_path, os.path.basename(folder_path) + "_CAPTURED_thumbs.jpg"
-    )
-    if os.path.exists(thumbnail_file):
-        for thumbnail, thumbnail_name, subfolder_path in main(vignetting_parameter, thumbnail_file):
-            # remove known camera obstructions
-            if mask is not None and disable_mask==False:
-                if np.array(thumbnail).shape!=mask.shape:
-                    print("Mask and image size do not match",np.array(thumbnail).shape,mask.shape)
-                else:
-                    print("Masking image")
-                    image = Image.fromarray(MaskImage.maskImage(np.array(thumbnail), mask))
-            else:
-                image = thumbnail  # .convert("RGB") already done in main
+class SpriteDetector(object):
+    def __init__(
+        self,
+        folder_path,
+        model_path,
+        conf_thres,
+        config,
+        disable_mask,
+        min_stars,
+        vignetting_parameter,
+        thumbnails_only,
+        max_fits_threshold,
+    ):
 
-            input_shape = input_details["shape"]
-            image = image.resize((input_shape[1], input_shape[2]))
-            input_data = np.array(image, dtype=np.float32)
-            
-            #taken from run function in yolov5/detect.py
-            input_data /= 255 
-            if len(input_data.shape) == 3:
-                input_data = input_data[None]  # expand for batch dim
+        self.min_stars = min_stars
+        self.folder_path = folder_path
+        self.model_path = model_path
+        self.config = config
+        self.thumbnails_only = thumbnails_only
+        self.vignetting_parameter = vignetting_parameter
 
-            # Set the tensor to point to the input data to be inferred
-            interpreter.set_tensor(input_details["index"], input_data)
+        self.iou_thres = 0.1
+        self.max_det = 4
+        self.conf_thres = conf_thres
+        self.max_fits_threshold = max_fits_threshold
 
-            # Run the inference
-            interpreter.invoke()
-
-            # Get the output tensor
-            prediction = interpreter.get_tensor(output_details["index"])
-
-            # process(prediction, image, subfolder_path, thumbnail_name, save=True)
-            process(
-                prediction,
-                image,
-                subfolder_path,
-                thumbnail_name,
-                conf_thres,
-                iou_thres=0.1,
-                max_det=4,
-                save=True,
-                calstars=calstars,
-                min_stars=min_stars,
+        self.interpreter, self.input_details, self.output_details = (
+            self.init_interpreter(model_path)
+        )
+        if disable_mask:
+            self.mask = None
+            print("Masking disabled, using original images")
+        else:
+            self.mask = load_mask(config)
+            if self.mask is None:
+                print("No mask file found")
+        self.calstars = readCALSTARS(
+            self.folder_path, "CALSTARS_" + os.path.basename(self.folder_path) + ".txt"
+        )[0]
+        if not self.calstars:
+            print("No CALSTARS file found")
+        thumbnail_file = os.path.join(
+            self.folder_path,
+            os.path.basename(self.folder_path) + "_CAPTURED_thumbs.jpg",
+        )
+        if os.path.exists(thumbnail_file):
+            self.swipe_thumbnails(thumbnail_file, vignetting_parameter)
+        else:
+            print(
+                f"Thumbnail file {thumbnail_file} not found. Skipping sprite detection."
             )
-    else:
-        print(f"Thumbnail file {thumbnail_file} not found. Skipping detection.")
+
+    def init_interpreter(self, model_path):
+        interpreter = Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+
+        input_details = interpreter.get_input_details()[0]
+        output_details = interpreter.get_output_details()[0]
+
+        print(input_details["shape"], input_details["dtype"])
+        print(output_details["shape"])
+        return interpreter, input_details, output_details
+
+    def swipe_thumbnails(self, thumbnail_file, vignetting_parameter):
+        if os.path.exists(thumbnail_file):
+            for thumbnail, thumbnail_name, subfolder_path in get_thumbnails(
+                vignetting_parameter, thumbnail_file
+            ):
+                prediction, image = self.get_prediction(thumbnail)
+
+                # process(prediction, image, subfolder_path, thumbnail_name, save=True)
+                output = self.process_predictions(
+                    prediction,
+                    thumbnail_name,
+                )
+                # sprites candidates were found
+                if output.shape[0] > 0:
+                    self.filter_detections(
+                        image,
+                        thumbnail_name,
+                        subfolder_path,
+                        output,
+                        True,
+                    )
+
+    def get_prediction(
+        self,
+        thumbnail,
+    ):
+        # remove known camera obstructions
+        if self.mask is not None:
+            if np.array(thumbnail).shape != self.mask.img.shape:
+                # print(
+                #    "Mask and image size do not match",
+                #    np.array(thumbnail).shape,
+                #    self.mask.img.shape,
+                # )
+                # mask_img = np.ascontiguousarray(self.mask.img)
+                # mask = Image.fromarray(mask_img).resize((thumbnail.width, thumbnail.height))
+
+                mask = np.resize(self.mask.img, (thumbnail.height, thumbnail.width, 3))
+                # mask = mask.resize((thumbnail.width, thumbnail.height))
+
+                # if len(np.array(thumbnail).shape) == 3:
+                # mask = mask.convert("RGB")
+
+                # print("Trying resize...",np.array(thumbnail).shape,
+                #    mask.shape,)
+                image = Image.fromarray(
+                    MaskImage.maskImage(np.array(thumbnail), mask, True)
+                )
+            else:
+
+                # print("Masking image")
+                image = Image.fromarray(
+                    MaskImage.maskImage(np.array(thumbnail), self.mask)
+                )
+        else:
+            image = thumbnail  # .convert("RGB") already done in get_thumbnails
+
+        input_shape = self.input_details["shape"]
+        image = image.resize((input_shape[1], input_shape[2]))
+        input_data = np.array(image, dtype=np.float32)
+
+        # taken from run function in yolov5/detect.py
+        input_data /= 255
+        if len(input_data.shape) == 3:
+            input_data = input_data[None]  # expand for batch dim
+
+        # Set the tensor to point to the input data to be inferred
+        self.interpreter.set_tensor(self.input_details["index"], input_data)
+
+        # Run the inference
+        self.interpreter.invoke()
+
+        # Get the output tensor
+        prediction = self.interpreter.get_tensor(self.output_details["index"])
+        return prediction, image
+
+    def process_predictions(
+        self,
+        prediction,
+        imgname,
+    ):
+        max_nms = 30000  # upper limit for number of boxes before nms
+        # max_wh = 7680 maximum box width/height
+
+        xc = prediction[..., 4] > self.conf_thres  # detection candidates mask
+        # output = np.zeros((max_det, 5))
+
+        # we can later vectorize prediction so it processes all images at once
+        for xi, x in enumerate(prediction):
+            x = x[xc[xi]]  # detection candidates
+            # Compute conf
+            x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
+            # calculate box
+            box = xywh2xyxy(x[:, :4])
+            # find highest confidence among all classes
+            conf = np.max(x[:, 5:6], 1, keepdims=True)
+            # j=np.argmax(x[:, 5:6], 1, keepdims=True)
+            # merge results into one array and filter candidates
+            x = np.concatenate((box, conf), 1)[np.reshape(conf, -1) > self.conf_thres]
+            if not x.shape[0]:
+                continue
+
+            print()
+            print(imgname)
+            print("Number of initial boxes:", x.shape[0])
+            # sort by confidence and remove excess boxes
+            x = x[np.argsort(x[:, 4])[::-1][:max_nms]]
+            print("Pre-NMS:", x)
+            # classes (only 1 used here),c=0
+            # c = x[:, 5:6] * max_wh
+            # boxes (offset by class), scores
+            x = x[:, :5]
+            # boxes, scores = x[:, :4] + c, x[:, 4]
+            # non-max suppression
+            i = nms(x, self.iou_thres)
+            print("Post-NMS:", i)
+
+            # limit detections
+            if self.max_det > 0:
+                output = x[i][: self.max_det]
+            else:
+                output = x[i]
+
+            # the output is in the format [x1, y1, x2, y2, conf]
+            # x1, y1 is the top left corner, x2, y2 is the bottom right corner
+            # values are normalized to the image size (0-1)
+            # 0,0 is upper left corner
+            print("Output:", output)
+            return output
+        # no detections found, return empty array
+        return np.zeros((0))
+
+    def filter_detections(
+        self,
+        image,
+        imgname,
+        folder_path,
+        output,
+        save,
+    ):
+        imgname, stack_files = self.get_timestamp(folder_path, imgname)
+        if stack_files is None:  # cant determine image timestamp so were skipping it
+            # probably empty part of the last thumb row
+            print("Can't determine image timestamp")
+            return
+        print("Determined timestamp:", imgname)
+        if self.calstars:
+            ff_stars = []
+            for ff in self.calstars:
+                #print(ff[0],len(ff[1]),stack_files)
+                if ff[0] in stack_files:
+                    ff_stars.append(len(ff[1]))
+            print(ff_stars)
+            if not ff_stars or statistics.median(ff_stars) < self.min_stars:
+                print("Not enough stars in the images")
+                return
+        print("Keeping detection, median stars:", statistics.median(ff_stars))
+        if self.thumbnails_only:
+            self.store_detections(image, folder_path, output, save, imgname)
+        else:
+            ff_found=self.analyze_fits(stack_files, save, folder_path)
+            if not ff_found:
+                print("Saving thumbnail since fits arent available.")
+                self.store_detections(image, folder_path, output, save, imgname)
+
+    def analyze_fits(self, stack_files, save, folder_path):
+        detections = []  # here we store detections for each fits file
+        ff_found=False
+        for ff_name in stack_files:
+            # dirname of folder_path is the main root folder of the night
+            try:
+                maxpixel = readFFfile(self.folder_path, ff_name).maxpixel
+                ff_found=True
+            except FileNotFoundError:
+                #print(f"File {ff_name} not found in {self.folder_path}. Skipping.")
+                continue
+            maxpixel_vignetting_corrected = apply_vignetting(
+                maxpixel, self.vignetting_parameter
+            ).convert("RGB")
+            prediction, image = self.get_prediction(maxpixel_vignetting_corrected)
+            output = self.process_predictions(
+                prediction, os.path.splitext(ff_name)[0] + "_sprite"
+            )
+            if output.shape[0] > 0:
+                detections.append((output, image))
+        
+        print("Number of detections:", len(detections))
+        # if this or above, scrap detections
+        if len(detections) <= self.max_fits_threshold:
+            # we can save them
+            for output, image in detections:
+                self.store_detections(
+                    image,
+                    folder_path,
+                    output,
+                    save,
+                    ff_name
+                    #os.path.splitext(ff_name)[0] + "_sprite",
+                )
+        else:
+            print(f"Too many detections ({len(detections)}). Skipping saving.")
+            # we can skip saving them, too many detections
+        return ff_found
+
+    def store_detections(self, image, folder_path, output, save, imgname):
+        self.mark_sprites(output, image, folder_path, imgname, save)
+
+        f = open(os.path.join(folder_path, "detections.txt"), "a")
+        f.write(f"{imgname}\n")
+        for i in output:
+            f.write(f"{i[0]},{i[1]},{i[2]},{i[3]},{i[4]}\n")
+        f.write("\n")
+        f.close()
+
+    def get_timestamp(self, folder_path, imgname):
+        """
+        Find the timestamp in a specific file from a tFS_*.tar.bz2 archive
+
+        Args:
+            folder_path (str): Path to the folder with thumbnails
+            imgname (str): Name of the image without extension
+        """
+
+        # Get parent folder (directory containing the folder_path)
+        parent_folder = os.path.dirname(folder_path)
+
+        # Extract info from imgname (assuming imgname format contains station code
+        code_and_date = imgname[:15]
+        thumb_index = int(imgname.split("_")[-1])
+
+        # Find all .tar.bz2 files in parent folder that match pattern
+        archive_file = ""
+        for filename in sorted(os.listdir(parent_folder)):
+            if filename.endswith(".tar.bz2") and filename.startswith(
+                f"FS_{code_and_date}"
+            ):
+                archive_file = filename
+                break
+
+        if archive_file == "":
+            print(f"No matching archives found for {code_and_date} in {parent_folder}")
+            return imgname
+
+        # Extract the timestamp from the appropriate file in the archive
+        archive_path = os.path.join(parent_folder, archive_file)
+        FF_FILES_IN_THUMB = 5  # config.thumb_stack
+        try:
+            with tarfile.open(archive_path, "r:bz2") as tar:
+                # Look through archive files, first element is "." so it is ommitted
+                files = sorted(
+                    tar.getmembers()[1:],
+                    key=lambda x: datetime.strptime(x.name[12:27], "%Y%m%d_%H%M%S"),
+                )
+
+                start_index = (thumb_index - 1) * FF_FILES_IN_THUMB
+                if start_index < len(files):
+                    stack_files = []
+                    for j in range(
+                        start_index, min(start_index + FF_FILES_IN_THUMB, len(files))
+                    ):
+                        stack_files.append("FF_" + files[j].name[5:31]+"_"+files[j].name[35:42] + ".fits")
+                    return (
+                        files[start_index].name[5:27] + "_thumbnail" + str(thumb_index),
+                        stack_files,
+                    )
+
+        except Exception as e:
+            print(f"Error reading archive {archive_file}: {e}")
+            return imgname, None
+
+        print(f"No timestamp found for {imgname}")
+        return imgname, None
+
+    def mark_sprites(self, output, image, folder_path, imgname, save=True):
+        edit_image = image.copy()
+        draw = ImageDraw.Draw(edit_image)
+        # Draw the rectangle
+        width, height = edit_image.size
+        for i in range(output.shape[0]):
+            top_left = (output[i, 0] * width, output[i, 1] * height)
+            bottom_right = (output[i, 2] * width, output[i, 3] * height)
+            draw.rectangle([top_left, bottom_right], outline="red", width=1)
+            # Display the number above the rectangle
+            number = str(round(output[i, 4], 3))
+            text_position = (
+                top_left[0],
+                top_left[1] - 15,
+            )  # Adjust the position as needed
+            draw.text(text_position, number, fill="red")
+
+        # Save the modified image
+        if save:
+            MARKED_DIR = os.path.join(folder_path, "marked")
+            os.makedirs(MARKED_DIR, exist_ok=True)
+            edit_image.save(f'{os.path.join(MARKED_DIR,imgname+"_marked")}.png')
+            UNMARKED_DIR = os.path.join(folder_path, "unmarked")
+            os.makedirs(UNMARKED_DIR, exist_ok=True)
+            image.save(f"{os.path.join(UNMARKED_DIR,imgname)}.png")
 
 
 if __name__ == "__main__":
@@ -384,7 +494,7 @@ if __name__ == "__main__":
         "-d",
         action="store_true",
         help="Disable the use of mask even if available",
-    ) 
+    )
     parser.add_argument(
         "--vignetting",
         "-v",
@@ -392,6 +502,20 @@ if __name__ == "__main__":
         default=0.0009,
         help="Confidence threshold for detection (default: %(default)s)",
     )
+    parser.add_argument(
+        "--thumbnails-only",
+        "-t",
+        action="store_true",
+        help="Processes only thumbnails and doesn't continue with fits files.",
+    )
+    parser.add_argument(
+        "--max-fits-threshold",
+        "-f",
+        type=int,
+        default=5,
+        help="Maximum allowed number of .fits files (from a single thumbnail) with detections (default: %(default)s). If more than this number of .fits files is detected, the detections are considered false positives.",
+    )
+
     args = parser.parse_args()
 
     import RMS.ConfigReader as cr
@@ -404,7 +528,7 @@ if __name__ == "__main__":
             "TensorFlow Lite is not available on this system. Sprite detection skipped..."
         )
     else:
-        run_sprite_detection(
+        SpriteDetector(
             folder_path=args.folder_path,
             model_path=args.model,
             conf_thres=args.confidence,
@@ -412,5 +536,7 @@ if __name__ == "__main__":
             disable_mask=args.disable_mask,
             min_stars=args.star_threshold,
             vignetting_parameter=args.vignetting,
+            thumbnails_only=args.thumbnails_only,
+            max_fits_threshold=args.max_fits_threshold,
         )
-    #example: python -m RMS.thumbs_detection -m /mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v7-pretrained-yolov5/weights/best-fp16.tflite -c 0.455 -s 0 /mnt/1tb/Documents/Astronomija/GMN/dev/hr002k/HR002K_20250411_181455_674301
+    # example: python -m RMS.thumbs_detection -m /mnt/1tb/Documents/Astronomija/GMN/dev/SpriteNet/results/train/spritenet-maxpixel-v7-pretrained-yolov5/weights/best-fp16.tflite -c 0.455 -s 0 /mnt/1tb/Documents/Astronomija/GMN/dev/hr002k/HR002K_20250411_181455_674301
