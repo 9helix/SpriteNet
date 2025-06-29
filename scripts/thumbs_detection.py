@@ -43,7 +43,7 @@ def xywh2xyxy(x):
 
 
 # adapted from https://blog.roboflow.com/how-to-code-non-maximum-suppression-nms-in-plain-numpy/
-def box_iou_batch(boxes_a: np.ndarray, boxes_b: np.ndarray) -> np.ndarray:
+def box_iou_batch(boxes_a, boxes_b):
 
     def box_area(box):
         return (box[2] - box[0]) * (box[3] - box[1])
@@ -63,7 +63,7 @@ def box_iou_batch(boxes_a: np.ndarray, boxes_b: np.ndarray) -> np.ndarray:
     return area_inter / (area_a[:, None] + area_b - area_inter)
 
 
-def nms(predictions: np.ndarray, iou_threshold: float = 0.45) -> np.ndarray:
+def nms(predictions, iou_threshold=0.45):
 
     rows, columns = predictions.shape
 
@@ -268,10 +268,10 @@ class SpriteDetector(object):
 
             print()
             print(imgname)
-            print("Number of initial boxes:", x.shape[0])
+            # print("Number of initial boxes:", x.shape[0])
             # sort by confidence and remove excess boxes
             x = x[np.argsort(x[:, 4])[::-1][:max_nms]]
-            print("Pre-NMS:", x)
+            # print("Pre-NMS:", x)
             # classes (only 1 used here),c=0
             # c = x[:, 5:6] * max_wh
             # boxes (offset by class), scores
@@ -279,7 +279,7 @@ class SpriteDetector(object):
             # boxes, scores = x[:, :4] + c, x[:, 4]
             # non-max suppression
             i = nms(x, self.iou_thres)
-            print("Post-NMS:", i)
+            # print("Post-NMS:", i)
 
             # limit detections
             if self.max_det > 0:
@@ -313,58 +313,62 @@ class SpriteDetector(object):
         if self.calstars:
             ff_stars = []
             for ff in self.calstars:
-                #print(ff[0],len(ff[1]),stack_files)
+                # print(ff[0],len(ff[1]),stack_files)
                 if ff[0] in stack_files:
                     ff_stars.append(len(ff[1]))
-            print(ff_stars)
+            print("Median stars", statistics.median(ff_stars))
             if not ff_stars or statistics.median(ff_stars) < self.min_stars:
                 print("Not enough stars in the images")
                 return
-        print("Keeping detection, median stars:", statistics.median(ff_stars))
+        print("Keeping detection")
         if self.thumbnails_only:
+            print("Storing thumbnail detection")
             self.store_detections(image, folder_path, output, save, imgname)
         else:
-            ff_found=self.analyze_fits(stack_files, save, folder_path)
+            print("Analyzing fits files")
+            ff_found = self.analyze_fits(stack_files, save, folder_path)
             if not ff_found:
                 print("Saving thumbnail since fits arent available.")
                 self.store_detections(image, folder_path, output, save, imgname)
 
     def analyze_fits(self, stack_files, save, folder_path):
         detections = []  # here we store detections for each fits file
-        ff_found=False
+        ff_found = False
         for ff_name in stack_files:
             # dirname of folder_path is the main root folder of the night
             try:
                 maxpixel = readFFfile(self.folder_path, ff_name).maxpixel
-                ff_found=True
+                ff_found = True
             except FileNotFoundError:
-                #print(f"File {ff_name} not found in {self.folder_path}. Skipping.")
+                # print(f"File {ff_name} not found in {self.folder_path}. Skipping.")
                 continue
             maxpixel_vignetting_corrected = apply_vignetting(
                 maxpixel, self.vignetting_parameter
             ).convert("RGB")
             prediction, image = self.get_prediction(maxpixel_vignetting_corrected)
             output = self.process_predictions(
-                prediction, os.path.splitext(ff_name)[0] + "_sprite"
+                prediction, ff_name  # os.path.splitext(ff_name)[0] + "_sprite"
             )
             if output.shape[0] > 0:
                 detections.append((output, image))
-        
-        print("Number of detections:", len(detections))
+
+        print("Number of FFs with detections:", len(detections))
         # if this or above, scrap detections
         if len(detections) <= self.max_fits_threshold:
-            # we can save them
-            for output, image in detections:
-                self.store_detections(
-                    image,
-                    folder_path,
-                    output,
-                    save,
-                    ff_name
-                    #os.path.splitext(ff_name)[0] + "_sprite",
-                )
+            if len(detections) > 0:
+                print("Saving FFs with detections")
+                # we can save them
+                for output, image in detections:
+                    self.store_detections(
+                        image,
+                        folder_path,
+                        output,
+                        save,
+                        ff_name,
+                        # os.path.splitext(ff_name)[0] + "_sprite",
+                    )
         else:
-            print(f"Too many detections ({len(detections)}). Skipping saving.")
+            print(f"Too many detections ({len(detections)}). Ditching the detections.")
             # we can skip saving them, too many detections
         return ff_found
 
@@ -424,7 +428,13 @@ class SpriteDetector(object):
                     for j in range(
                         start_index, min(start_index + FF_FILES_IN_THUMB, len(files))
                     ):
-                        stack_files.append("FF_" + files[j].name[5:31]+"_"+files[j].name[35:42] + ".fits")
+                        stack_files.append(
+                            "FF_"
+                            + files[j].name[5:31]
+                            + "_"
+                            + files[j].name[35:42]
+                            + ".fits"
+                        )
                     return (
                         files[start_index].name[5:27] + "_thumbnail" + str(thumb_index),
                         stack_files,

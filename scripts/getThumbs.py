@@ -93,7 +93,7 @@ def get_thumbnails(vignetting_parameter, image_path, save=False):
 
             # thumbnail = thumbnail.resize((320, 320))
             # thumbnail.paste(thumb_timestamp, box_where)
-            thumbnail = apply_vignetting(thumbnail, vignetting_parameter *resize_factor).convert("RGB")
+            thumbnail = apply_vignetting(thumbnail, vignetting_parameter).convert("RGB")
             #thumbnail = thumbnail.resize((320, 320)) should be handled afterwards
             # Save the thumbnail to a separate file
             count += 1
