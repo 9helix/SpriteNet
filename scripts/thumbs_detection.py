@@ -1,4 +1,5 @@
 import os
+import shutil
 from PIL import ImageDraw, Image
 import numpy as np
 import logging
@@ -23,6 +24,8 @@ except ImportError:
         USING_FULL_TF = True
     except ImportError:
         TFLITE_AVAILABLE = False
+import csv
+
 
 """Some functions were adapted from the yolov5 github repository, mostly from the utils/general.py"""
 
@@ -126,6 +129,10 @@ class SpriteDetector(object):
         self.max_det = 4
         self.conf_thres = conf_thres
         self.max_fits_threshold = max_fits_threshold
+
+        self.save_dir = os.path.join(
+            config.data_dir, "SpriteFiles", os.path.basename(folder_path)
+        )
 
         self.interpreter, self.input_details, self.output_details = (
             self.init_interpreter(model_path)
@@ -312,11 +319,13 @@ class SpriteDetector(object):
         print("Determined timestamp:", imgname)
         if self.calstars:
             ff_stars = []
+            # print(self.calstars[0][0],stack_files)
             for ff in self.calstars:
                 # print(ff[0],len(ff[1]),stack_files)
                 if ff[0] in stack_files:
                     ff_stars.append(len(ff[1]))
-            print("Median stars", statistics.median(ff_stars))
+            if ff_stars:
+                print("Median stars", statistics.median(ff_stars))
             if not ff_stars or statistics.median(ff_stars) < self.min_stars:
                 print("Not enough stars in the images")
                 return
@@ -334,6 +343,7 @@ class SpriteDetector(object):
     def analyze_fits(self, stack_files, save, folder_path):
         detections = []  # here we store detections for each fits file
         ff_found = False
+        ff_names_with_detections = []
         for ff_name in stack_files:
             # dirname of folder_path is the main root folder of the night
             try:
@@ -350,7 +360,10 @@ class SpriteDetector(object):
                 prediction, ff_name  # os.path.splitext(ff_name)[0] + "_sprite"
             )
             if output.shape[0] > 0:
+                ff_names_with_detections.append(ff_name)
                 detections.append((output, image))
+            else:
+                print(f"No detections in {ff_name}.")
 
         print("Number of FFs with detections:", len(detections))
         # if this or above, scrap detections
@@ -358,7 +371,14 @@ class SpriteDetector(object):
             if len(detections) > 0:
                 print("Saving FFs with detections")
                 # we can save them
-                for output, image in detections:
+                for i in range(len(detections)):
+                    output, image = detections[i]
+                    ff_name = ff_names_with_detections[i]
+                    os.makedirs(os.path.join(self.save_dir, "FFs"), exist_ok=True)
+                    shutil.copy(
+                        os.path.join(self.folder_path, ff_name),
+                        os.path.join(self.save_dir, "FFs", ff_name),
+                    )
                     self.store_detections(
                         image,
                         folder_path,
@@ -373,7 +393,16 @@ class SpriteDetector(object):
         return ff_found
 
     def store_detections(self, image, folder_path, output, save, imgname):
-        self.mark_sprites(output, image, folder_path, imgname, save)
+        self.mark_sprites(output, image, imgname, save)
+
+        with open(
+            os.path.join(self.save_dir, "detections.csv"), "a", newline=""
+        ) as csvfile:
+            writer = csv.writer(
+                csvfile, delimiter=",", quotechar="|", quoting=csv.QUOTE_MINIMAL
+            )
+            for i in output:
+                writer.writerow([imgname, i[0], i[1], i[2], i[3], i[4]])
 
         f = open(os.path.join(folder_path, "detections.txt"), "a")
         f.write(f"{imgname}\n")
@@ -384,7 +413,7 @@ class SpriteDetector(object):
 
     def get_timestamp(self, folder_path, imgname):
         """
-        Find the timestamp in a specific file from a tFS_*.tar.bz2 archive
+        Find the timestamp in a specific file from a FS_*.tar.bz2 archive
 
         Args:
             folder_path (str): Path to the folder with thumbnails
@@ -428,13 +457,7 @@ class SpriteDetector(object):
                     for j in range(
                         start_index, min(start_index + FF_FILES_IN_THUMB, len(files))
                     ):
-                        stack_files.append(
-                            "FF_"
-                            + files[j].name[5:31]
-                            + "_"
-                            + files[j].name[35:42]
-                            + ".fits"
-                        )
+                        stack_files.append("FF_" + files[j].name[5:39] + ".fits")
                     return (
                         files[start_index].name[5:27] + "_thumbnail" + str(thumb_index),
                         stack_files,
@@ -447,7 +470,7 @@ class SpriteDetector(object):
         print(f"No timestamp found for {imgname}")
         return imgname, None
 
-    def mark_sprites(self, output, image, folder_path, imgname, save=True):
+    def mark_sprites(self, output, image, imgname, save=True):
         edit_image = image.copy()
         draw = ImageDraw.Draw(edit_image)
         # Draw the rectangle
@@ -466,12 +489,9 @@ class SpriteDetector(object):
 
         # Save the modified image
         if save:
-            MARKED_DIR = os.path.join(folder_path, "marked")
+            MARKED_DIR = os.path.join(self.save_dir, "marked")
             os.makedirs(MARKED_DIR, exist_ok=True)
             edit_image.save(f'{os.path.join(MARKED_DIR,imgname+"_marked")}.png')
-            UNMARKED_DIR = os.path.join(folder_path, "unmarked")
-            os.makedirs(UNMARKED_DIR, exist_ok=True)
-            image.save(f"{os.path.join(UNMARKED_DIR,imgname)}.png")
 
 
 if __name__ == "__main__":

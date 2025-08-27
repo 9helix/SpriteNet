@@ -54,6 +54,9 @@ def folder_walker(folder, detection_only=True):
 if __name__ == "__main__":
     while True:
         folder = input("Enter folder: ")
+        if folder == "":
+            print("Exiting...")
+            break
         detect = input("Detection only? y/N ")
         converted = folder_walker(folder,True if detect.lower()=="y" else False)
         if converted is None:
